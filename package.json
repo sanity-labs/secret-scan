@@ -1,0 +1,45 @@
+{
+  "name": "@sanity-labs/secret-scan",
+  "version": "0.1.0",
+  "description": "Secret detection library based on gitleaks rules",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "update-rules": "tsx scripts/update-rules.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "tsx": "^4.0.0",
+    "@iarna/toml": "^2.2.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sanity-labs/secret-scan.git"
+  },
+  "keywords": [
+    "secret",
+    "scan",
+    "detect",
+    "redact",
+    "gitleaks",
+    "security"
+  ]
+}
