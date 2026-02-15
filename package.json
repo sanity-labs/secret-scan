@@ -21,6 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "update-rules": "tsx scripts/update-rules.ts",
+    "update-fixtures": "bash scripts/extract-fixtures.sh",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
