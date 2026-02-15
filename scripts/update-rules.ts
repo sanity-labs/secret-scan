@@ -13,8 +13,9 @@
  *
  * Note on inline flags: JS (Node <22) doesn't support (?i:...) or (?-i:...).
  * We promote any (?i:...) to a global 'i' flag and strip (?-i:...) to (?:...).
- * The (?-i:...) groups in gitleaks already enumerate their cases explicitly
- * (e.g. (?-i:ETSY|[Ee]tsy)), so this is safe for all current rules.
+ * This means (?-i:...) groups lose their case-sensitivity enforcement — a known
+ * limitation causing ~11 false positive regressions vs gitleaks. Node 22+ with
+ * ES2025 regex modifiers ((?i:...) / (?-i:...)) would fix this.
  */
 
 import { parse as parseToml } from '@iarna/toml'
@@ -78,6 +79,12 @@ function convertGoRegex(goRegex: string): { pattern: string; flags: string } {
   }
 
   // 3. Convert (?-i:...) to (?:...)
+  //    JS doesn't support inline flag toggles. The (?-i:...) groups lose their
+  //    case-sensitivity enforcement when we use a global 'i' flag. This causes
+  //    ~11 false positive regressions vs gitleaks (e.g., "SetSysctl" matching
+  //    the etsy rule because "etsy" appears case-insensitively in "setsysctl").
+  //    These are documented as known limitations. Node 22+ with ES2025 regex
+  //    modifiers would fix this, but we target Node 20+.
   pattern = pattern.replace(/\(\?-i:/g, '(?:')
 
   // 4. Convert (?s:.) to [\s\S] — dotall group
@@ -95,6 +102,14 @@ function convertGoRegex(goRegex: string): { pattern: string; flags: string } {
 
   // 6. Convert \z to $ — end of string
   pattern = pattern.replace(/\\z/g, '$')
+
+  // 7. Convert POSIX character classes — not supported in JS
+  pattern = pattern.replace(/\[:alnum:]/g, 'a-zA-Z0-9')
+  pattern = pattern.replace(/\[:alpha:]/g, 'a-zA-Z')
+  pattern = pattern.replace(/\[:digit:]/g, '0-9')
+  pattern = pattern.replace(/\[:lower:]/g, 'a-z')
+  pattern = pattern.replace(/\[:upper:]/g, 'A-Z')
+  pattern = pattern.replace(/\[:space:]/g, '\\s')
 
   return { pattern, flags }
 }
