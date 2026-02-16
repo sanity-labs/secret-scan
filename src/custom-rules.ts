@@ -58,4 +58,63 @@ export const customRules: Rule[] = [
     keywords: ['bearer'],
     entropy: 3.5,
   },
+
+  // ─── Inngest signing keys ─────────────────────────────────────────
+  // Format: signkey-prod-<hex> or signkey-test-<hex>
+  // No TruffleHog detector exists. Distinctive prefix makes this safe.
+  {
+    id: 'inngest-signing-key',
+    label: 'Inngest Signing Key',
+    regex: new RegExp(
+      '\\b(signkey-(?:prod|test|staging)-[a-f0-9]{32,})\\b',
+      '',
+    ),
+    keywords: ['signkey-'],
+  },
+
+  // ─── Inngest event keys ───────────────────────────────────────────
+  // Format varies, but commonly used with INNGEST_EVENT_KEY= context.
+  // Event keys are hex strings. We detect them when the env var name
+  // provides context.
+  {
+    id: 'inngest-event-key',
+    label: 'Inngest Event Key',
+    regex: new RegExp(
+      '(?:INNGEST_EVENT_KEY\\s*[=:]\\s*)["\']?([a-f0-9A-F]{16,})["\']?',
+      '',
+    ),
+    keywords: ['inngest_event_key'],
+  },
+
+  // ─── ElevenLabs bare sk_ keys ─────────────────────────────────────
+  // TruffleHog's elevenlabs-v2 rule matches sk_ + 48 hex chars but
+  // requires "elevenlabs" keyword in the input. This catches bare paste
+  // of sk_ + 48 hex chars without context. The sk_ prefix + hex-only
+  // suffix is distinctive enough.
+  {
+    id: 'elevenlabs-bare',
+    label: 'ElevenLabs API Key',
+    regex: new RegExp(
+      '\\b(sk_[a-f0-9]{48})\\b',
+      '',
+    ),
+    keywords: ['sk_'],
+  },
+
+  // ─── Sanity bare tokens ───────────────────────────────────────────
+  // TruffleHog's sanity rule matches sk + 79 alphanumeric chars but
+  // requires "sanity" keyword in the input. Sanity tokens start with
+  // sk followed by a capital letter (skE..., skR..., skS...) which
+  // distinguishes them from other sk-prefixed keys. Real tokens are
+  // ~80 chars total (sk + 78). Entropy threshold prevents false positives.
+  {
+    id: 'sanity-bare',
+    label: 'Sanity API Token',
+    regex: new RegExp(
+      '\\b(sk[A-Z][A-Za-z0-9]{58,})\\b',
+      '',
+    ),
+    keywords: ['sk'],
+    entropy: 4.0,
+  },
 ]

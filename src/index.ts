@@ -54,6 +54,50 @@ for (const rule of rules) {
   }
 }
 
+// --- Placeholder detection ---
+
+// Minimum entropy for the variable part of a secret (after stripping known prefixes).
+// Placeholder values like "ghp_xxxxxxxxxxxx" or "sk_live_xxxxxxxx" have near-zero
+// entropy in their suffix. Real secrets have entropy > 3.5. We use 1.5 as a generous
+// threshold that catches obvious placeholders without rejecting real keys.
+const MIN_SUFFIX_ENTROPY = 1.5
+
+// Known prefixes to strip before measuring entropy of the variable part
+const KNOWN_PREFIXES = [
+  'sk-proj-', 'sk-svcacct-', 'sk-admin-', 'sk-ant-api03-',
+  'sk_live_', 'sk_test_', 'pk_live_', 'pk_test_', 'rk_live_', 'rk_test_',
+  'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_',
+  'xoxb-', 'xoxp-', 'xoxa-', 'xoxo-', 'xapp-',
+  'glpat-', 'glsa_',
+  'npm_', 'lin_api_',
+  'gsk_', 'r8_', 'sbp_', 'sk_',
+  'SG.', 'dp.pt.', 'PMAK-',
+  'signkey-prod-', 'signkey-test-', 'signkey-staging-',
+  'sk-', 'AKIA',
+]
+
+function isPlaceholder(secret: string): boolean {
+  // Strip the longest matching known prefix to isolate the variable part
+  let longestPrefix = ''
+  for (const prefix of KNOWN_PREFIXES) {
+    if (secret.startsWith(prefix) && prefix.length > longestPrefix.length) {
+      longestPrefix = prefix
+    }
+  }
+
+  // If no known prefix matched, not a prefixed secret — skip placeholder check
+  if (!longestPrefix) return false
+
+  const suffix = secret.slice(longestPrefix.length)
+
+  // Empty suffix after prefix strip — just the prefix alone, not a real secret
+  if (suffix.length === 0) return true
+
+  // Check entropy of the variable part
+  const entropy = shannonEntropy(suffix)
+  return entropy < MIN_SUFFIX_ENTROPY
+}
+
 // --- Global allowlist ---
 
 function isGlobalAllowlisted(secret: string): boolean {
@@ -136,24 +180,31 @@ function extractSecret(match: RegExpExecArray, rule: Rule): string {
   return match[0]
 }
 
-const GENERIC_RULE_IDS = new Set(['generic-sk-secret', 'bearer-token'])
+const GENERIC_RULE_IDS = new Set(['generic-sk-secret', 'bearer-token', 'sanity-bare'])
 
 /**
  * Scan a string for secrets.
  *
- * Returns an array of every secret found in the input. Uses keyword
- * pre-filtering for performance — most of the 1,100+ regexes are skipped
- * for any given input.
+ * Two-phase approach:
+ * 1. Collect ALL candidate matches from all rules (no overlap filtering yet)
+ * 2. Resolve overlaps by preferring the longest match
+ *
+ * This prevents a short match from an earlier rule blocking a longer,
+ * more correct match from a later rule. For example, TruffleHog's postgres
+ * rule captures just "postgres" from a full connection string URL — the
+ * custom database-connection-string rule captures the full URL and should win.
+ *
+ * Uses keyword pre-filtering for performance — most of the 1,100+ regexes
+ * are skipped for any given input.
  */
 export function scan(input: string): Secret[] {
   if (!input) return []
 
   const inputLower = input.toLowerCase()
   const candidates = getCandidateRules(inputLower)
-  const secrets: Secret[] = []
 
-  // Track matched ranges to avoid overlapping detections
-  const matchedRanges: Array<{ start: number; end: number }> = []
+  // Phase 1: Collect all candidate matches (no overlap filtering)
+  const allMatches: Secret[] = []
 
   for (const rule of candidates) {
     // Reset regex lastIndex for global-like iteration
@@ -169,18 +220,14 @@ export function scan(input: string): Secret[] {
       const start = secretStart >= 0 ? secretStart : match.index
       const end = start + secret.length
 
-      // Skip if this range overlaps with an already-detected secret
-      // (prefer the first/more specific match)
-      const overlaps = matchedRanges.some(
-        (r) => start < r.end && end > r.start
-      )
-      if (overlaps) continue
-
       // Check entropy threshold
       if (rule.entropy !== undefined) {
         const entropy = shannonEntropy(secret)
         if (entropy < rule.entropy) continue
       }
+
+      // Check for placeholder values (e.g., ghp_xxxxxxxxxxxx)
+      if (isPlaceholder(secret)) continue
 
       // Check global allowlist
       if (isGlobalAllowlisted(secret)) continue
@@ -191,7 +238,7 @@ export function scan(input: string): Secret[] {
 
       const confidence = GENERIC_RULE_IDS.has(rule.id) ? 'medium' : 'high'
 
-      secrets.push({
+      allMatches.push({
         rule: rule.id,
         label: rule.label,
         text: secret,
@@ -200,14 +247,35 @@ export function scan(input: string): Secret[] {
         end,
       })
 
-      matchedRanges.push({ start, end })
-
       // Prevent infinite loop on zero-length matches
       if (match[0].length === 0) regex.lastIndex++
     }
   }
 
-  // Sort by position in input
+  // Phase 2: Resolve overlaps — longest match wins
+  // Sort by length descending so we process longest matches first,
+  // then by start position for stable ordering
+  allMatches.sort((a, b) => {
+    const lenDiff = (b.end - b.start) - (a.end - a.start)
+    if (lenDiff !== 0) return lenDiff
+    return a.start - b.start
+  })
+
+  const secrets: Secret[] = []
+  const matchedRanges: Array<{ start: number; end: number }> = []
+
+  for (const candidate of allMatches) {
+    // Skip if this range overlaps with an already-accepted (longer) match
+    const overlaps = matchedRanges.some(
+      (r) => candidate.start < r.end && candidate.end > r.start
+    )
+    if (overlaps) continue
+
+    secrets.push(candidate)
+    matchedRanges.push({ start: candidate.start, end: candidate.end })
+  }
+
+  // Sort by position in input for stable output
   secrets.sort((a, b) => a.start - b.start)
 
   return secrets

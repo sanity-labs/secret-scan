@@ -1,6 +1,6 @@
 {
   "name": "@sanity-labs/secret-scan",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Secret detection library for chat and paste contexts. 1,100+ rules from TruffleHog detectors.",
   "license": "MIT",
   "type": "module",
