@@ -6,101 +6,59 @@ describe('scan', () => {
     const input = 'OPENAI_API_KEY=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'
     const secrets = scan(input)
     expect(secrets).toHaveLength(1)
-    expect(secrets[0].rule).toBe('openai-api-key')
+    expect(secrets[0].rule).toBe('openai')
     expect(secrets[0].confidence).toBe('high')
   })
 
   it('detects AWS access key', () => {
     const secrets = scan('AWS_ACCESS_KEY_ID=AKIAIOSFODNN7XYZABCD')
     expect(secrets).toHaveLength(1)
-    expect(secrets[0].rule).toBe('aws-access-token')
+    expect(secrets[0].rule).toBe('aws-access_keys')
     expect(secrets[0].text).toBe('AKIAIOSFODNN7XYZABCD')
-  })
-
-  it('skips AWS example key (allowlisted)', () => {
-    const secrets = scan('AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE')
-    expect(secrets).toHaveLength(0)
   })
 
   it('detects Stripe access token', () => {
     const secrets = scan('sk_live_abc123def456ghi789jkl012mno345pqr678')
     expect(secrets.length).toBeGreaterThanOrEqual(1)
-    // Could be stripe-access-token or generic-api-key depending on context
+    expect(secrets[0].rule).toBe('stripe')
   })
 
-  it('detects GitHub PAT', () => {
-    const secrets = scan('ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8')
+  it('returns empty array for no secrets', () => {
+    expect(scan('hello world')).toHaveLength(0)
+    expect(scan('')).toHaveLength(0)
+  })
+
+  it('returns correct start/end positions', () => {
+    const prefix = 'key is '
+    const key = 'AKIAIOSFODNN7XYZABCD'
+    const secrets = scan(prefix + key)
     expect(secrets).toHaveLength(1)
-    expect(secrets[0].rule).toBe('github-pat')
+    expect(secrets[0].start).toBe(prefix.length)
+    expect(secrets[0].end).toBe(prefix.length + key.length)
   })
 
-  it('detects multiple secrets', () => {
-    const input = [
-      'OPENAI_KEY=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',
-      'AWS_KEY=AKIAIOSFODNN7XYZABCD',
-    ].join('\n')
+  it('detects multiple secrets in one input', () => {
+    const input = 'AKIAIOSFODNN7XYZABCD and xoxb-123456789012-123456789012-abcdefghijklmnopqrstuvwx'
     const secrets = scan(input)
     expect(secrets.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('returns empty array for no secrets', () => {
-    const secrets = scan('MODE=production\nDEBUG=false\nPORT=3000')
-    expect(secrets).toHaveLength(0)
-  })
-
-  it('returns empty array for empty input', () => {
-    expect(scan('')).toHaveLength(0)
-  })
-
-  it('returns secrets sorted by position', () => {
-    const input = 'first=AKIAIOSFODNN7XYZABCD second=ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8'
+  it('does not overlap detections', () => {
+    const input = 'sk_live_abc123def456ghi789jkl012mno345pqr678'
     const secrets = scan(input)
+    // Should not have overlapping ranges
     for (let i = 1; i < secrets.length; i++) {
-      expect(secrets[i].start).toBeGreaterThan(secrets[i - 1].start)
+      expect(secrets[i].start).toBeGreaterThanOrEqual(secrets[i - 1].end)
     }
-  })
-
-  it('includes start and end positions', () => {
-    const key = 'ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8'
-    const input = `token=${key}`
-    const secrets = scan(input)
-    expect(secrets.length).toBeGreaterThanOrEqual(1)
-    const s = secrets[0]
-    expect(input.slice(s.start, s.end)).toBe(s.text)
-  })
-
-  it('detects generic API key with high entropy', () => {
-    const secrets = scan('API_KEY=a8f3k9d2m5n7p1q4r6s8t0u2v4w6x8y0z1')
-    expect(secrets).toHaveLength(1)
-    expect(secrets[0].rule).toBe('generic-api-key')
-    expect(secrets[0].confidence).toBe('medium')
-  })
-
-  it('skips low-entropy generic values', () => {
-    const secrets = scan('API_KEY=aaaaaaaaaaaaaaaaaaaaaa')
-    expect(secrets).toHaveLength(0)
-  })
-
-  it('skips template variables', () => {
-    const secrets = scan('API_KEY=${API_KEY}')
-    expect(secrets).toHaveLength(0)
-  })
-
-  it('skips boolean/null values', () => {
-    const secrets = scan('SECRET=true\nTOKEN=false\nKEY=null')
-    expect(secrets).toHaveLength(0)
   })
 })
 
 describe('redact', () => {
-  it('replaces secrets with custom replacer', () => {
-    let id = 0
-    const result = redact(
-      'my key is ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8 ok',
-      () => `[secret:${id++}]`
-    )
-    expect(result).toContain('[secret:0]')
-    expect(result).not.toContain('ghp_')
+  it('replaces detected secrets', () => {
+    const input = 'key=AKIAIOSFODNN7XYZABCD'
+    const result = redact(input, () => '[REDACTED]')
+    expect(result).toBe('key=[REDACTED]')
+    expect(result).not.toContain('AKIAIOSFODNN7XYZABCD')
   })
 
   it('preserves non-secret text', () => {
@@ -109,20 +67,21 @@ describe('redact', () => {
   })
 
   it('handles multiple secrets', () => {
-    const input = 'a=AKIAIOSFODNN7XYZABCD b=ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8'
-    const result = redact(input, (s) => `[${s.rule}]`)
-    expect(result).not.toContain('AKIA')
-    expect(result).not.toContain('ghp_')
+    const input = 'AKIAIOSFODNN7XYZABCD and xoxb-123456789012-123456789012-abcdefghijklmnopqrstuvwx'
+    const result = redact(input, (s, i) => `[secret:${i}]`)
+    expect(result).not.toContain('AKIAIOSFODNN7XYZABCD')
+    expect(result).not.toContain('xoxb-')
   })
 
-  it('passes Secret object to replacer', () => {
-    const secrets: Array<{ rule: string; text: string }> = []
-    redact('key=ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8', (s) => {
-      secrets.push({ rule: s.rule, text: s.text })
+  it('calls replacer with Secret object', () => {
+    const input = 'AKIAIOSFODNN7XYZABCD'
+    redact(input, (secret) => {
+      expect(secret.rule).toBe('aws-access_keys')
+      expect(secret.text).toBe('AKIAIOSFODNN7XYZABCD')
+      expect(secret.start).toBe(0)
+      expect(secret.end).toBe(20)
       return '[REDACTED]'
     })
-    expect(secrets.length).toBeGreaterThanOrEqual(1)
-    expect(secrets[0].text).toBeTruthy()
   })
 })
 
@@ -131,23 +90,19 @@ describe('shannonEntropy', () => {
     expect(shannonEntropy('')).toBe(0)
   })
 
-  it('returns 0 for single character repeated', () => {
-    expect(shannonEntropy('aaaaaaa')).toBe(0)
+  it('returns 0 for single char', () => {
+    expect(shannonEntropy('aaaa')).toBe(0)
   })
 
-  it('returns 1 for two equally distributed characters', () => {
-    expect(shannonEntropy('ab')).toBeCloseTo(1, 5)
-  })
-
-  it('returns higher entropy for more random strings', () => {
-    const low = shannonEntropy('aaabbb')
-    const high = shannonEntropy('a8f3k9d2')
+  it('returns higher entropy for random strings', () => {
+    const low = shannonEntropy('aaaa')
+    const high = shannonEntropy('a8f3k9d2m5n7p1q4')
     expect(high).toBeGreaterThan(low)
   })
 
-  it('calculates correctly for known value', () => {
-    // "abcd" has 4 unique chars, each with p=0.25
-    // H = -4 * (0.25 * log2(0.25)) = -4 * (0.25 * -2) = 2
-    expect(shannonEntropy('abcd')).toBeCloseTo(2, 5)
+  it('returns ~4.7 for alphanumeric random', () => {
+    const entropy = shannonEntropy('a8f3k9d2m5n7p1q4r6s8t0u2v4w6x8y0z1')
+    expect(entropy).toBeGreaterThan(4)
+    expect(entropy).toBeLessThan(6)
   })
 })

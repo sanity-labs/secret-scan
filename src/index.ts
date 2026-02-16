@@ -2,18 +2,23 @@
  * @sanity-labs/secret-scan
  *
  * Detect and redact secrets in strings. Works in browser and Node.js.
- * Zero runtime dependencies. Rules derived from gitleaks (MIT licensed).
+ * Zero runtime dependencies. Rules derived from TruffleHog detectors (Apache 2.0).
  */
 
-import { rules, globalAllowlist, type Rule } from './rules.js'
+import { rules as trufflehogRules, globalAllowlist, type Rule } from './rules.js'
+import { customRules } from './custom-rules.js'
 import { shannonEntropy } from './entropy.js'
+
+// TruffleHog rules first (more specific vendor patterns), custom rules after
+// (broader safety net). Overlap detection prefers the first match.
+const rules: Rule[] = [...trufflehogRules, ...customRules]
 
 // --- Public types ---
 
 export interface Secret {
-  /** Gitleaks rule ID, e.g. 'openai-api-key' */
+  /** Rule ID, e.g. 'openai' */
   rule: string
-  /** Human-readable label, e.g. 'OpenAI API Key' */
+  /** Human-readable label, e.g. 'Openai' */
   label: string
   /** The matched secret value */
   text: string
@@ -131,13 +136,13 @@ function extractSecret(match: RegExpExecArray, rule: Rule): string {
   return match[0]
 }
 
-const GENERIC_RULE_IDS = new Set(['generic-api-key'])
+const GENERIC_RULE_IDS = new Set(['generic-sk-secret', 'bearer-token'])
 
 /**
  * Scan a string for secrets.
  *
  * Returns an array of every secret found in the input. Uses keyword
- * pre-filtering for performance — most of the 221 regexes are skipped
+ * pre-filtering for performance — most of the 1,100+ regexes are skipped
  * for any given input.
  */
 export function scan(input: string): Secret[] {
