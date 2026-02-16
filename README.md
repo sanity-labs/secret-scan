@@ -1,8 +1,11 @@
 # @sanity-labs/secret-scan
 
-Detect and redact secrets in strings. Works in browser and Node.js. Zero runtime dependencies.
+Detect and redact secrets in strings. Designed for **chat and paste contexts** where secrets appear without surrounding code context.
 
-Rules derived from [gitleaks](https://github.com/gitleaks/gitleaks) (MIT licensed) — 221 rules covering API keys, tokens, passwords, and credentials from 100+ providers.
+- **1,100+ detection rules** extracted from [TruffleHog](https://github.com/trufflesecurity/trufflehog) detectors
+- **Zero runtime dependencies** — works in browser and Node.js
+- **Fast** — keyword pre-filtering means most rules are skipped for any given input (~0.15ms for short messages)
+- **Two functions** — `scan(input)` finds secrets, `redact(input, replacer)` replaces them
 
 ## Install
 
@@ -12,114 +15,81 @@ npm install @sanity-labs/secret-scan
 
 ## Usage
 
-### `scan` — find secrets
-
 ```typescript
-import { scan } from '@sanity-labs/secret-scan'
+import { scan, redact } from '@sanity-labs/secret-scan'
 
-const secrets = scan('OPENAI_API_KEY=sk-proj-abc123...\nMODE=production')
-// [
-//   {
-//     rule: 'openai-api-key',
-//     label: 'OpenAI API Key',
-//     text: 'sk-proj-abc123...',
-//     confidence: 'high',
-//     start: 15,
-//     end: 32
-//   }
-// ]
+// Find secrets
+const secrets = scan('my key is ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh1234')
+// [{ rule: 'github-v2', label: 'Github V2', text: 'ghp_...', confidence: 'high', start: 10, end: 50 }]
+
+// Redact secrets
+const safe = redact(input, (secret, index) => `[secret:${index}]`)
+// 'my key is [secret:0]'
 ```
 
-### `redact` — find and replace secrets
+## What it detects
 
-```typescript
-import { redact } from '@sanity-labs/secret-scan'
+Bare paste (no surrounding context needed):
 
-const secrets = new Map()
-let nextId = 0
+| Provider | Prefix/Pattern | Rule ID |
+|----------|---------------|---------|
+| OpenAI | `sk-proj-...T3BlbkFJ...` | `openai` |
+| Anthropic | `sk-ant-api03-...` | `anthropic` |
+| AWS | `AKIA...` | `aws-access_keys` |
+| GitHub | `ghp_`, `gho_`, `github_pat_` | `github-v2` |
+| Stripe | `sk_live_`, `rk_live_` | `stripe` |
+| Slack | `xoxb-`, `xoxp-` | `slack` |
+| Groq | `gsk_` | `groq` |
+| Replicate | `r8_` | `replicate` |
+| SendGrid | `SG.` | `sendgrid` |
+| JWT | `eyJ...` | `jwt` |
+| GitLab | `glpat-` | `gitlab-v2` |
+| NPM | `npm_` | `npmtokenv2` |
+| Linear | `lin_api_` | `linearapi` |
+| Supabase | `sbp_` | `supabasetoken` |
+| Postman | `PMAK-` | `postman` |
 
-const redacted = redact(pastedText, (secret) => {
-  const key = `[secret:${nextId++}]`
-  secrets.set(key, secret)
-  return key
-})
-
-// redacted: "OPENAI_API_KEY=[secret:0]\nSTRIPE_KEY=[secret:1]"
-// secrets: Map { '[secret:0]' => { text: 'sk-proj-...' }, ... }
-```
-
-## API
-
-### `scan(input: string): Secret[]`
-
-Returns an array of every secret found in the input.
-
-### `redact(input: string, replacer: (secret: Secret) => string): string`
-
-Calls `replacer` for each detected secret. The return value replaces the secret in the output string. The caller owns all state — `redact` just does string replacement.
-
-### `Secret`
-
-```typescript
-interface Secret {
-  rule: string                   // gitleaks rule ID, e.g. 'openai-api-key'
-  label: string                  // human-readable, e.g. 'OpenAI API Key'
-  text: string                   // the matched secret value
-  confidence: 'high' | 'medium'  // provider pattern vs entropy-based
-  start: number                  // start index in input
-  end: number                    // end index (exclusive) in input
-}
-```
-
-### `shannonEntropy(s: string): number`
-
-Shannon entropy calculation. Exported for advanced use cases.
+Plus 850+ more providers. Connection strings (postgres://, mongodb://, redis://) and Bearer tokens are also detected.
 
 ## How it works
 
-1. **Keyword pre-filter** — Each rule has keywords. Before running a regex, we check if the input contains any of its keywords (case-insensitive). This keeps scanning fast with 221 rules — most regexes are skipped for any given input.
+Rules are extracted from [TruffleHog's Go detectors](https://github.com/trufflesecurity/trufflehog/tree/main/pkg/detectors) and compiled to JavaScript RegExp. TruffleHog's keyword pre-filter uses strings from the **secret itself** (prefixes like `gsk_`, `T3BlbkFJ`), not surrounding context — this is why it works for bare paste in chat.
 
-2. **Regex matching** — Rules are compiled from [gitleaks.toml](https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml) with Go→JS regex conversion (named groups, inline flags, dotall).
+A keyword index maps each keyword to its rules. For any input, only rules whose keywords appear in the input are tested — typically <10 rules out of 1,100+.
 
-3. **Entropy filtering** — Many rules have Shannon entropy thresholds. Low-entropy matches (like `KEY=aaaaaaa`) are filtered out.
-
-4. **Allowlist filtering** — Global and per-rule allowlists filter false positives. Includes 1,446 stopwords for the generic-api-key rule.
-
-## Updating rules
+### Updating rules
 
 ```bash
 npm run update-rules
 ```
 
-Fetches the latest `gitleaks.toml` from GitHub, converts Go regex → JS regex, and writes `src/rules.ts`. Run this whenever gitleaks updates their rules.
+This clones/updates TruffleHog, parses all detector Go files, converts Go regex to JS, and regenerates `src/rules.ts`.
 
-### Go → JS regex conversion
+## API
 
-| Go pattern | JS equivalent | Notes |
-|---|---|---|
-| `(?P<name>...)` | `(?<name>...)` | Named groups |
-| `(?i)` at start | `i` flag | Case-insensitive |
-| `(?i:...)` mid-pattern | `(?:...)` + `i` flag | Promoted to global flag |
-| `(?-i:...)` | `(?:...)` | Groups already enumerate cases |
-| `(?s:.)` | `[\s\S]` | Dotall |
-| `\z` | `$` | End of string |
+### `scan(input: string): Secret[]`
 
-## Rules coverage
+Returns all secrets found in the input string.
 
-221 rules from gitleaks covering:
+```typescript
+interface Secret {
+  rule: string        // Rule ID (e.g., 'openai')
+  label: string       // Human-readable label
+  text: string        // The matched secret value
+  confidence: 'high' | 'medium'
+  start: number       // Start index in input
+  end: number         // End index (exclusive)
+}
+```
 
-- **Cloud providers**: AWS, GCP, Azure, DigitalOcean, Heroku, Fly.io, etc.
-- **AI/ML**: OpenAI, Anthropic, Cohere, HuggingFace, Perplexity
-- **Payment**: Stripe, Square, Plaid, Coinbase, Flutterwave
-- **DevOps**: GitHub, GitLab, Bitbucket, CircleCI, Travis CI, Jenkins
-- **Communication**: Slack, Discord, Telegram, Twilio, SendGrid
-- **Databases**: PlanetScale, MongoDB Atlas, ClickHouse
-- **And 80+ more providers**
+### `redact(input: string, replacer: (secret: Secret) => string): string`
 
-Plus the `generic-api-key` rule which catches `KEY=value` patterns with entropy thresholds and 1,446 stopwords.
+Finds and replaces all secrets. Replacements applied right-to-left to preserve indices.
+
+### `shannonEntropy(s: string): number`
+
+Calculate Shannon entropy of a string. Used internally for entropy-based filtering.
 
 ## License
 
-MIT — includes gitleaks copyright notice per their license terms.
-
-This package uses rules derived from [gitleaks](https://github.com/gitleaks/gitleaks), which is also MIT licensed. Copyright (c) 2019 Zachary Rice.
+MIT. Rules derived from [TruffleHog](https://github.com/trufflesecurity/trufflehog) (Apache 2.0).
